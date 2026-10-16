@@ -1,6 +1,9 @@
 # Smart Finance Planner
 
-## Menjalankan aplikasi
+🌐 **Live Demo (Bisa diakses publik):**
+[https://zaqiabdillah123.github.io/smart-finance-planner/](https://zaqiabdillah123.github.io/smart-finance-planner/)
+
+## Menjalankan aplikasi secara lokal
 
 1. Pastikan Node.js versi 18 atau lebih baru sudah terpasang.
 2. Buka terminal di folder aplikasi.
