@@ -379,18 +379,99 @@ function renderHistory(history) {
   history.forEach(item => historyBody.append(createHistoryRow(item)));
 }
 
+const STORAGE_KEY = "smart_finance_history_v1";
+
+const DEFAULT_INITIAL_HISTORY = [
+  {
+    id: "demo-1",
+    name: "Muhammad Zaqi Abdillah",
+    totalMoney: 1959000,
+    monthlyIncome: 1299000,
+    savingTarget: 2500000,
+    monthlyExpense: 649500,
+    monthlySavings: 259800,
+    emergencyTarget: 3897000,
+    emergencyCoverage: 50,
+    goalProgress: 78,
+    remainingTarget: 541000,
+    monthsToTarget: 3,
+    status: "Cukup",
+    createdAt: "2026-06-14T10:00:57.657Z"
+  }
+];
+
+function calculateFinancialPlan(input) {
+  const monthlyExpense = Math.round(input.monthlyIncome * 0.5);
+  const monthlySavings = Math.round(input.monthlyIncome * 0.2);
+  const emergencyTarget = monthlyExpense * 6;
+  const goalProgress = Math.min(100, Math.round((input.totalMoney / input.savingTarget) * 100));
+  const emergencyCoverage = emergencyTarget === 0
+    ? 0
+    : Math.min(100, Math.round((input.totalMoney / emergencyTarget) * 100));
+  const remainingTarget = Math.max(0, input.savingTarget - input.totalMoney);
+  const monthsToTarget = monthlySavings > 0 ? Math.ceil(remainingTarget / monthlySavings) : null;
+  const status = emergencyCoverage >= 100
+    ? "Sehat"
+    : emergencyCoverage >= 50
+      ? "Cukup"
+      : "Perlu Perhatian";
+
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    ...input,
+    monthlyExpense,
+    monthlySavings,
+    emergencyTarget,
+    emergencyCoverage,
+    goalProgress,
+    remainingTarget,
+    monthsToTarget,
+    status,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function getStoredHistory() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // fallback
+  }
+  return DEFAULT_INITIAL_HISTORY;
+}
+
+function saveStoredHistory(history) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(0, 100)));
+  } catch (err) {
+    console.warn("Storage error:", err);
+  }
+}
+
 async function loadHistory() {
   try {
     const res  = await fetch("/api/history");
-    if (!res.ok) throw new Error();
-    const data = await res.json();
-    renderHistory(data.history || []);
-    if (data.history?.[0]) updateDashboard(data.history[0]);
-    buildBarChart(data.history || [], currentResult);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.history) && data.history.length > 0) {
+        renderHistory(data.history);
+        if (data.history[0]) updateDashboard(data.history[0]);
+        buildBarChart(data.history, currentResult);
+        return;
+      }
+    }
   } catch {
-    formMessage.textContent = "Jalankan website melalui server Node agar fitur backend aktif.";
-    formMessage.className   = "form-message error";
+    // Backend API tidak aktif (misal di GitHub Pages / hosting statis), gunakan penyimpanan lokal
   }
+
+  const localHistory = getStoredHistory();
+  renderHistory(localHistory.slice(0, 12));
+  if (localHistory[0]) updateDashboard(localHistory[0]);
+  buildBarChart(localHistory.slice(0, 12), currentResult);
 }
 
 // ─── Form submit ──────────────────────────────────────────────────────────────
@@ -404,25 +485,65 @@ financeForm?.addEventListener("submit", async e => {
 
   const rawIncome     = parseAmount(document.querySelector("#monthly-income").value);
   const monthlyIncome = toMonthly(rawIncome, currentPeriod);
+  const name          = (document.querySelector("#full-name")?.value || "").trim();
+  const totalMoney    = parseAmount(document.querySelector("#total-money").value);
+  const savingTarget  = parseAmount(document.querySelector("#saving-target").value);
+
+  if (name.length < 2 || name.length > 80) {
+    formMessage.textContent = "Nama harus terdiri dari 2 sampai 80 karakter.";
+    formMessage.className   = "form-message error";
+    calculateButton.disabled = false;
+    calculateButton.querySelector("span").textContent = "Hitung Keuangan";
+    return;
+  }
+  if (totalMoney < 0 || monthlyIncome <= 0 || savingTarget <= 0) {
+    formMessage.textContent = "Pendapatan dan target harus lebih besar dari nol.";
+    formMessage.className   = "form-message error";
+    calculateButton.disabled = false;
+    calculateButton.querySelector("span").textContent = "Hitung Keuangan";
+    return;
+  }
 
   const payload = {
-    name:         document.querySelector("#full-name").value,
-    totalMoney:   parseAmount(document.querySelector("#total-money").value),
+    name,
+    totalMoney,
     monthlyIncome,
-    savingTarget: parseAmount(document.querySelector("#saving-target").value)
+    savingTarget
   };
 
   try {
-    const res  = await fetch("/api/finance", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Data gagal diproses.");
-    updateDashboard(data.result);
-    formMessage.textContent = data.message;
+    let result = null;
+    let message = "Rencana keuangan berhasil dihitung.";
+
+    try {
+      const res  = await fetch("/api/finance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        result = data.result;
+        if (data.message) message = data.message;
+      }
+    } catch {
+      // Backend offline atau static hosting
+    }
+
+    if (!result) {
+      result = calculateFinancialPlan(payload);
+      const currentList = [...getStoredHistory()];
+      currentList.unshift(result);
+      saveStoredHistory(currentList);
+    }
+
+    updateDashboard(result);
+    formMessage.textContent = message;
     formMessage.className   = "form-message success";
     await loadHistory();
     document.querySelector("#target")?.scrollIntoView({ behavior:"smooth", block:"center" });
   } catch(err) {
-    formMessage.textContent = err.message;
+    formMessage.textContent = err.message || "Data gagal diproses.";
     formMessage.className   = "form-message error";
   } finally {
     calculateButton.disabled = false;
